@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control de Notas - Refaccionaria</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf.plugin.autotable.min.js"></script>
+    
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; padding: 20px; color: #333; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .form-section { border: 1px solid #e1e4e8; padding: 20px; border-radius: 10px; margin-bottom: 25px; background: #fdfdfd; }
+        h3 { margin-top: 0; color: #2c3e50; border-left: 4px solid #3498db; padding-left: 10px; }
+        input, select, button { margin: 5px; padding: 12px; border-radius: 6px; border: 1px solid #ccc; font-size: 14px; }
+        input:focus { border-color: #3498db; outline: none; box-shadow: 0 0 5px rgba(52,152,219,0.3); }
+        button { cursor: pointer; color: white; font-weight: bold; border: none; transition: 0.2s; }
+        button:active { transform: scale(0.98); }
+        .btn-blue { background: #3498db; }
+        .btn-green { background: #27ae60; }
+        .btn-red { background: #e74c3c; }
+        .btn-orange { background: #f39c12; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; font-size: 13px; }
+        th, td { border: 1px solid #eee; padding: 12px; text-align: left; }
+        th { background: #2c3e50; color: white; }
+        tr:hover { background: #f9f9f9; }
+        .abono-extra { background: #e8f8f5; border: 2px solid #27ae60; padding: 15px; margin: 15px 0; border-radius: 8px; }
+        .paginacion { display: flex; justify-content: center; margin-top: 20px; gap: 5px; }
+        .item-list { list-style: none; padding: 0; margin: 15px 0; border-top: 1px solid #eee; }
+        .item-list li { padding: 8px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
+        .badge-deuda { color: #e74c3c; font-weight: bold; }
+        .badge-pagado { color: #27ae60; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Refaccionaria: Notas de Pedido</h1>
+
+    <div class="form-section">
+        <h3>1. Datos del Cliente</h3>
+        <input type="text" id="cliente" placeholder="Nombre del Cliente" style="width: 45%;">
+        <input type="text" id="telefono" placeholder="Teléfono" style="width: 45%;">
+        
+        <h3>2. Agregar Refacciones (Enter para añadir)</h3>
+        <input type="text" id="piezaNombre" placeholder="Nombre de la pieza" style="width: 40%;">
+        <input type="number" id="piezaCant" placeholder="Cant." style="width: 15%;">
+        <input type="number" id="piezaPrecio" placeholder="Precio Unit." style="width: 20%;">
+        <button onclick="agregarPieza()" class="btn-blue">Añadir</button>
+        
+        <ul id="listaTemp" class="item-list"></ul>
+
+        <h3>3. Estado y Pago</h3>
+        <select id="estado" onchange="toggleAbono()">
+            <option value="sin pago">Sin pago</option>
+            <option value="adelanto">Con anticipo</option>
+            <option value="pagado">Pagado totalmente</option>
+            <option value="entregado y pagado">Entregado y pagado</option>
+            <option value="entregado con abono">Entregado + abono</option>
+            <option value="entregado sin pago">Entregado sin pago</option>
+        </select>
+        <input type="number" id="montoPagado" value="0" placeholder="Monto Inicial / Ya pagado">
+        
+        <div id="divAbonoNuevo" class="abono-extra" style="display:none;">
+            <strong>Abono de Entrega:</strong><br>
+            <input type="number" id="montoNuevo" placeholder="¿Cuánto abona hoy?">
+        </div>
+
+        <button onclick="guardarTodo()" class="btn-green" id="btnGuardar" style="width:100%; margin-top:20px; font-size: 16px;">GUARDAR</button>
+        <button onclick="resetearFormulario()" id="btnCancel" style="display:none; background:#95a5a6; width:100%; margin-top:10px;">CANCELAR EDICIÓN</button>
+    </div>
+
+    <hr style="border: 0; border-top: 1px solid #ccc; margin: 30px 0;">
+
+    <h3>Historial de Notas</h3>
+    <div style="margin-bottom: 15px;">
+        <input type="text" id="busqueda" onkeyup="pintarTabla()" placeholder="Buscar por cliente..." style="width: 250px;">
+        <input type="date" id="busquedaFecha" onchange="pintarTabla()">
+    </div>
+    
+    <table id="tablaNotas">
+        <thead>
+            <tr>
+                <th>Folio</th>
+                <th>Fecha</th>
+                <th>Cliente</th>
+                <th>Total</th>
+                <th>Pagado</th>
+                <th>Saldo</th>
+                <th>Estado</th>
+                <th>Acciones</th>
+            </tr>
+        </thead>
+        <tbody id="cuerpoTabla"></tbody>
+    </table>
+    <div id="paginacion" class="paginacion"></div>
+</div>
+
+<script>
+    let tempPiezas = [];
+    let db = JSON.parse(localStorage.getItem('ref_data')) || [];
+    let editID = null;
+    let pag = 1;
+
+    // Detectar Enter en campos
+    const inputsPieza = [document.getElementById('piezaNombre'), document.getElementById('piezaCant'), document.getElementById('piezaPrecio')];
+    inputsPieza.forEach(input => {
+        input.addEventListener('keypress', (e) => { if (e.key === 'Enter') agregarPieza(); });
+    });
+
+    function toggleAbono() {
+        const est = document.getElementById('estado').value;
+        document.getElementById('divAbonoNuevo').style.display = (est === 'entregado con abono') ? 'block' : 'none';
+    }
+
+    function agregarPieza() {
+        const n = document.getElementById('piezaNombre').value;
+        const c = parseFloat(document.getElementById('piezaCant').value);
+        const p = parseFloat(document.getElementById('piezaPrecio').value);
+        
+        if(!n || isNaN(c) || isNaN(p)) return alert("Llena todos los campos de la pieza.");
+
+        tempPiezas.push({n, c, p, sub: c*p});
+        renderTemp();
+        document.getElementById('piezaNombre').value = '';
+        document.getElementById('piezaCant').value = '';
+        document.getElementById('piezaPrecio').value = '';
+        document.getElementById('piezaNombre').focus(); 
+    }
+
+    function renderTemp() {
+        const l = document.getElementById('listaTemp');
+        l.innerHTML = tempPiezas.map((x, i) => `
+            <li>
+                <span><b>${x.c}</b> x ${x.n} ($${x.p.toFixed(2)})</span>
+                <span>$${x.sub.toFixed(2)} <button onclick="tempPiezas.splice(${i},1); renderTemp()" style="color:#e74c3c; background:none; cursor:pointer;">[X]</button></span>
+            </li>`).join('');
+    }
+
+    function guardarTodo() {
+        const cl = document.getElementById('cliente').value;
+        if(!cl || tempPiezas.length === 0) return alert("Faltan datos del cliente o piezas.");
+
+        const total = tempPiezas.reduce((a, b) => a + b.sub, 0);
+        const est = document.getElementById('estado').value;
+        let pagadoTotal = parseFloat(document.getElementById('montoPagado').value) || 0;
+
+        // LÓGICA DE ACTUALIZACIÓN AUTOMÁTICA DE SALDO
+        if (est === 'pagado' || est === 'entregado y pagado') {
+            pagadoTotal = total; // Si el estatus es Pagado, el saldo restante será 0
+        } else if (est === 'entregado con abono') {
+            const abonoHoy = parseFloat(document.getElementById('montoNuevo').value) || 0;
+            pagadoTotal += abonoHoy;
+        }
+
+        const nota = {
+            id: editID || Date.now(),
+            folio: editID ? db.find(x=>x.id===editID).folio : (db.length + 501),
+            fecha: editID ? db.find(x=>x.id===editID).fecha : new Date().toLocaleString(),
+            cliente: cl,
+            tel: document.getElementById('telefono').value,
+            piezas: [...tempPiezas],
+            total: total,
+            pagado: pagadoTotal,
+            estado: est
+        };
+
+        if(editID) {
+            const i = db.findIndex(x => x.id === editID);
+            db[i] = nota;
+        } else {
+            db.push(nota);
+        }
+
+        localStorage.setItem('ref_data', JSON.stringify(db));
+        generarPDF(nota);
+        resetearFormulario();
+        pintarTabla();
+    }
+
+    function pintarTabla() {
+        const busq = document.getElementById('busqueda').value.toLowerCase();
+        const busqF = document.getElementById('busquedaFecha').value;
+        
+        let filtrados = db.filter(x => x.cliente.toLowerCase().includes(busq));
+        if(busqF) {
+            filtrados = filtrados.filter(x => {
+                const fNota = x.fecha.split(',')[0].split('/').reverse().join('-'); 
+                return fNota.includes(busqF);
+            });
+        }
+
+        filtrados.sort((a,b) => b.id - a.id);
+        const inicio = (pag - 1) * 5;
+        const visible = filtrados.slice(inicio, inicio + 5);
+
+        const cuerpo = document.getElementById('cuerpoTabla');
+        cuerpo.innerHTML = visible.map(x => {
+            const saldo = x.total - x.pagado;
+            const claseSaldo = saldo > 0.01 ? 'badge-deuda' : 'badge-pagado';
+            
+            return `
+                <tr>
+                    <td>#${x.folio}</td>
+                    <td>${x.fecha.split(',')[0]}</td>
+                    <td>${x.cliente}</td>
+                    <td>$${x.total.toFixed(2)}</td>
+                    <td>$${x.pagado.toFixed(2)}</td>
+                    <td class="${claseSaldo}">$${Math.max(0, saldo).toFixed(2)}</td>
+                    <td><span style="font-size:11px; font-weight:bold;">${x.estado.toUpperCase()}</span></td>
+                    <td>
+                        <button class="btn-orange" onclick="editar(${x.id})" style="padding:5px 8px">Editar</button>
+                        <button class="btn-blue" onclick="reimprimir(${x.id})" style="padding:5px 8px">PDF</button>
+                        <button class="btn-red" onclick="borrar(${x.id})" style="padding:5px 8px">Eliminar</button>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+        
+        const totalPags = Math.ceil(filtrados.length / 5);
+        let htmlPag = '';
+        for(let i=1; i<=totalPags; i++) {
+            htmlPag += `<button onclick="pag=${i}; pintarTabla()" style="background:${pag===i?'#2c3e50':'#95a5a6'}; padding:5px 10px">${i}</button>`;
+        }
+        document.getElementById('paginacion').innerHTML = htmlPag;
+    }
+
+    function editar(id) {
+        const x = db.find(n => n.id === id);
+        editID = x.id;
+        document.getElementById('cliente').value = x.cliente;
+        document.getElementById('telefono').value = x.tel;
+        document.getElementById('montoPagado').value = x.pagado;
+        document.getElementById('estado').value = x.estado;
+        tempPiezas = [...x.piezas];
+        renderTemp();
+        document.getElementById('btnGuardar').innerText = "ACTUALIZAR NOTA";
+        document.getElementById('btnCancel').style.display = 'block';
+        toggleAbono();
+        window.scrollTo(0,0);
+    }
+
+    function borrar(id) {
+        if(confirm("¿Borrar esta nota?")) {
+            db = db.filter(x => x.id !== id);
+            localStorage.setItem('ref_data', JSON.stringify(db));
+            pintarTabla();
+        }
+    }
+
+    function reimprimir(id) {
+        generarPDF(db.find(n => n.id === id));
+    }
+
+    function resetearFormulario() {
+        editID = null;
+        tempPiezas = [];
+        document.getElementById('cliente').value = '';
+        document.getElementById('telefono').value = '';
+        document.getElementById('montoPagado').value = '0';
+        document.getElementById('montoNuevo').value = '';
+        document.getElementById('estado').value = 'sin pago';
+        document.getElementById('btnGuardar').innerText = "GUARDAR";
+        document.getElementById('btnCancel').style.display = 'none';
+        renderTemp();
+        toggleAbono();
+    }
+
+    function generarPDF(n) {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+        doc.setFontSize(22);
+        doc.setTextColor(44, 62, 80);
+        doc.text("NOTA DE PEDIDO", 105, 20, { align: 'center' });
+        doc.setFontSize(10);
+        doc.text(`Folio: ${n.folio} | Fecha: ${n.fecha}`, 14, 30);
+        doc.setFontSize(12);
+        doc.text(`Cliente: ${n.cliente} | Tel: ${n.tel || 'N/A'}`, 14, 40);
+
+        doc.autoTable({
+            startY: 48,
+            head: [['Pieza', 'Cant.', 'P. Unit', 'Subtotal']],
+            body: n.piezas.map(p => [p.n, p.c, `$${p.p.toFixed(2)}`, `$${p.sub.toFixed(2)}`]),
+            headStyles: { fillColor: [44, 62, 80] }
+        });
+
+        const finalY = doc.lastAutoTable.finalY + 10;
+        doc.text(`Total: $${n.total.toFixed(2)}`, 140, finalY);
+        doc.text(`Pagado: $${n.pagado.toFixed(2)}`, 140, finalY + 7);
+        doc.setFont("helvetica", "bold");
+        doc.text(`SALDO: $${(n.total - n.pagado).toFixed(2)}`, 140, finalY + 14);
+        doc.save(`Nota_${n.folio}_${n.cliente}.pdf`);
+    }
+
+    window.onload = pintarTabla;
+</script>
+
+</body>
+</html>
